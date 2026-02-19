@@ -54,6 +54,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     return parser
 
+def unescape_java_properties_value(s: str) -> str:
+    """
+    RuneLite stores JSON inside Java .properties files where separators like ':' are escaped as '\\:'.
+    We undo the common escapes so the value becomes valid JSON for json.loads().
+    """
+    # Order matters: unescape backslashes first
+    s = s.replace("\\\\", "\\")
+    # Unescape separators commonly escaped in .properties
+    s = s.replace("\\:", ":").replace("\\=", "=")
+    # Common escape sequences
+    s = s.replace("\\n", "\n").replace("\\t", "\t").replace("\\r", "\r")
+    s = s.replace("\\#", "#").replace("\\!", "!")
+    return s
 
 def parse_properties(path: Path) -> dict[str, str]:
     data: dict[str, str] = {}
@@ -68,8 +81,9 @@ def parse_properties(path: Path) -> dict[str, str]:
             else:
                 key, value = line, ""
             key = key.strip().replace("\\=", "=").replace("\\:", ":")
-            value = value.strip()
+            value = unescape_java_properties_value(value.strip())
             data[key] = value
+
     return data
 
 
