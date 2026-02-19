@@ -9,6 +9,7 @@ from typing import Any
 from PySide6.QtCore import QFileSystemWatcher, QTimer
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -34,13 +35,20 @@ class BankViewerWindow(QMainWindow):
         layout = QVBoxLayout(central)
 
         self.status_label = QLabel("Waiting for export data...")
+        self.selection_label = QLabel("Save: -")
+        self.selection_combo = QComboBox()
+        self.selection_combo.currentIndexChanged.connect(self._on_selection_changed)
         self.summary_label = QLabel("Total items: 0")
+        self._current_options: list[dict[str, Any]] = []
+        self._pending_payload: dict[str, Any] | None = None
 
         self.table = QTableWidget(0, 2)
         self.table.setHorizontalHeaderLabels(["itemId", "qty"])
         self.table.horizontalHeader().setStretchLastSection(True)
 
         layout.addWidget(self.status_label)
+        layout.addWidget(self.selection_label)
+        layout.addWidget(self.selection_combo)
         layout.addWidget(self.summary_label)
         layout.addWidget(self.table)
         self.setCentralWidget(central)
@@ -98,10 +106,75 @@ class BankViewerWindow(QMainWindow):
 
         if current is None:
             self.summary_label.setText("No bank data yet – open bank in-game")
+            self.selection_label.setText("Save: -")
+            self.selection_combo.clear()
             self.table.setRowCount(0)
             return
 
-        entries = self._normalize_current(current)
+        self._pending_payload = payload
+        self._refresh_selection_options(payload)
+        selected = self._get_selected_save(payload)
+        self._render_selected_save(selected)
+
+        if initial and self.debug:
+            LOGGER.debug("Loaded selected bank save from %s", self.export_file)
+
+    def _on_selection_changed(self, _index: int) -> None:
+        if self._pending_payload is None:
+            return
+        self._render_selected_save(self._get_selected_save(self._pending_payload))
+
+    def _refresh_selection_options(self, payload: dict[str, Any]) -> None:
+        entries = payload.get("allCurrentParsed")
+        if not isinstance(entries, list):
+            entries = []
+
+        self._current_options = [entry for entry in entries if isinstance(entry, dict)]
+        previous_key = self.selection_combo.currentData()
+        self.selection_combo.blockSignals(True)
+        self.selection_combo.clear()
+
+        for entry in self._current_options:
+            label = self._selection_label(entry)
+            key = str(entry.get("id", ""))
+            self.selection_combo.addItem(label, key)
+
+        if self.selection_combo.count() == 0:
+            self.selection_combo.blockSignals(False)
+            return
+
+        matched_index = self.selection_combo.findData(previous_key)
+        self.selection_combo.setCurrentIndex(matched_index if matched_index >= 0 else 0)
+        self.selection_combo.blockSignals(False)
+
+    def _get_selected_save(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+        if self.selection_combo.count() == 0:
+            selected = payload.get("currentParsed")
+            return selected if isinstance(selected, dict) else None
+
+        selected_key = self.selection_combo.currentData()
+        for entry in self._current_options:
+            if str(entry.get("id", "")) == str(selected_key):
+                return entry
+
+        selected = payload.get("currentParsed")
+        return selected if isinstance(selected, dict) else None
+
+    def _render_selected_save(self, selected: dict[str, Any] | None) -> None:
+        if not isinstance(selected, dict):
+            self.selection_label.setText("Save: -")
+            self.summary_label.setText("Total items: 0")
+            self.table.setRowCount(0)
+            return
+
+        account_name = selected.get("accountName", "unknown")
+        world_type = selected.get("worldType", "unknown")
+        date_string = selected.get("dateTimeString", "unknown")
+        self.selection_label.setText(
+            f"Viewing: {account_name} | {world_type} | {date_string}"
+        )
+
+        entries = self._normalize_current(selected.get("items"))
         self.table.setRowCount(len(entries))
 
         total_qty = 0
@@ -118,8 +191,12 @@ class BankViewerWindow(QMainWindow):
 
         self.summary_label.setText(f"Total items: {total_qty}")
 
-        if initial and self.debug:
-            LOGGER.debug("Loaded %s entries from %s", len(entries), self.export_file)
+    @staticmethod
+    def _selection_label(entry: dict[str, Any]) -> str:
+        account_name = entry.get("accountName", entry.get("accountIdentifier", ""))
+        world_type = entry.get("worldType", "")
+        date_string = entry.get("dateTimeString", "")
+        return f"{account_name} ({world_type}) - {date_string}"
 
     @staticmethod
     def _normalize_current(current: Any) -> list[dict[str, Any]]:

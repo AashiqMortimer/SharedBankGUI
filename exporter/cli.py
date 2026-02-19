@@ -127,10 +127,86 @@ def parse_json_value(raw: str | None, default: Any) -> Any:
         raise ExporterError(f"Failed to parse JSON value: {exc}") from exc
 
 
+def _parse_int(value: Any, fallback: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def parse_item_data(item_data: str) -> list[dict[str, int]]:
+    tokens = [token.strip() for token in item_data.split(",") if token.strip()]
+    if len(tokens) % 2 != 0:
+        raise ExporterError(
+            "Invalid bankMemory itemData: expected itemId,qty pairs but got odd token count"
+        )
+
+    items: list[dict[str, int]] = []
+    for index in range(0, len(tokens), 2):
+        item_id = _parse_int(tokens[index])
+        qty = _parse_int(tokens[index + 1])
+        items.append({"itemId": item_id, "qty": qty})
+    return items
+
+
+def parse_current_entries(current: Any, name_map: dict[str, Any]) -> list[dict[str, Any]]:
+    if not isinstance(current, list):
+        return []
+
+    parsed_entries: list[dict[str, Any]] = []
+    for entry in current:
+        if not isinstance(entry, dict):
+            continue
+        account_identifier = str(entry.get("accountIdentifier", ""))
+        account_name = name_map.get(account_identifier, account_identifier)
+        item_data = entry.get("itemData", "")
+        parsed_entries.append(
+            {
+                "id": _parse_int(entry.get("id")),
+                "worldType": str(entry.get("worldType", "")),
+                "dateTimeString": str(entry.get("dateTimeString", "")),
+                "accountIdentifier": account_identifier,
+                "accountName": str(account_name),
+                "items": parse_item_data(str(item_data)),
+            }
+        )
+    return parsed_entries
+
+
+def default_current_selection(all_current_parsed: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not all_current_parsed:
+        return None
+
+    account_order: list[str] = []
+    for entry in all_current_parsed:
+        identifier = entry.get("accountIdentifier", "")
+        if identifier not in account_order:
+            account_order.append(identifier)
+
+    selected_account = account_order[0] if account_order else ""
+    account_entries = [
+        entry
+        for entry in all_current_parsed
+        if entry.get("accountIdentifier", "") == selected_account
+    ]
+
+    default_world_entries = [
+        entry for entry in account_entries if entry.get("worldType") == "DEFAULT"
+    ]
+    candidates = default_world_entries or account_entries
+
+    def _sort_key(entry: dict[str, Any]) -> tuple[int, str]:
+        return (_parse_int(entry.get("id")), str(entry.get("dateTimeString", "")))
+
+    return max(candidates, key=_sort_key) if candidates else None
+
+
 def build_export_payload(source: RuneLiteSource, props: dict[str, str]) -> dict[str, Any]:
     current = parse_json_value(props.get(f"{BANK_GROUP}.currentList"), None)
     snapshots = parse_json_value(props.get(f"{BANK_GROUP}.snapshotList"), [])
     name_map = parse_json_value(props.get(f"{BANK_GROUP}.nameMap"), {})
+    all_current_parsed = parse_current_entries(current, name_map)
+    current_parsed = default_current_selection(all_current_parsed)
     return {
         "exportedAt": datetime.now(timezone.utc).isoformat(),
         "source": {
@@ -139,6 +215,8 @@ def build_export_payload(source: RuneLiteSource, props: dict[str, str]) -> dict[
             "configFile": str(source.config_file),
         },
         "current": current,
+        "allCurrentParsed": all_current_parsed,
+        "currentParsed": current_parsed,
         "snapshots": snapshots,
         "nameMap": name_map,
     }
