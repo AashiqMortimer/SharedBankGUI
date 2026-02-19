@@ -5,7 +5,7 @@ hiddenimports = collect_submodules("exporter")
 
 
 a = Analysis(
-    ['viewer/__main__.py'],
+    ['viewer_app.py'],
     pathex=[],
     binaries=[],
     datas=[],

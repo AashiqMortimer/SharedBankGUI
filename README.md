@@ -94,6 +94,8 @@ The packaged viewer includes the exporter module and keeps **Auto-export on laun
    ./scripts/build_macos.sh
    ```
 
+   The build uses a top-level `viewer_app.py` entrypoint so PyInstaller starts the viewer with absolute imports (avoids macOS app launch failures from package-relative entrypoints).
+
 4. Output artifact:
 
    - `dist/BankViewer.app`
