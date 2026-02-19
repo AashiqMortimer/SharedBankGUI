@@ -68,6 +68,8 @@ python -m viewer \
   --output-name "aashiq-bank.json"
 ```
 
+You can also launch the viewer without CLI args. On first run it will ask you to choose your shared folder, and after that it remembers your selection.
+
 ## Packaging with PyInstaller
 
 The packaged viewer includes the exporter module and keeps **Auto-export on launch** working without a separate exporter binary.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -29,6 +31,8 @@ from PySide6.QtWidgets import (
 from .item_mapping import ItemMappingUnavailableError, load_item_mapping
 
 LOGGER = logging.getLogger("viewer")
+DEFAULT_OUTPUT_NAME = "aashiq-bank.json"
+CONFIG_RELATIVE_PATH = Path("SharedBankGUI") / "config.json"
 
 
 class BankViewerWindow(QMainWindow):
@@ -390,13 +394,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--shared-folder",
-        required=True,
         help="Folder containing exported JSON file.",
     )
     parser.add_argument(
         "--output-name",
-        default="aashiq-bank.json",
-        help="Export JSON filename (default: aashiq-bank.json)",
+        default=DEFAULT_OUTPUT_NAME,
+        help=f"Export JSON filename (default: {DEFAULT_OUTPUT_NAME})",
     )
     parser.add_argument(
         "--debug",
@@ -404,6 +407,104 @@ def build_parser() -> argparse.ArgumentParser:
         help="Enable debug logs.",
     )
     return parser
+
+
+def _config_path() -> Path:
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / CONFIG_RELATIVE_PATH
+
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        return Path(appdata) / CONFIG_RELATIVE_PATH
+
+    return Path.home() / ".config" / CONFIG_RELATIVE_PATH
+
+
+def _load_config(config_path: Path) -> dict[str, Any] | None:
+    if not config_path.exists():
+        return None
+
+    try:
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        LOGGER.warning("Ignoring unreadable config file: %s", config_path)
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    return payload
+
+
+def _save_config(config_path: Path, shared_folder: Path, output_name: str) -> None:
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "shared_folder": str(shared_folder),
+        "output_name": output_name,
+    }
+    config_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _auto_detect_shared_folder() -> Path | None:
+    home = Path.home()
+    userprofile = Path(os.environ.get("USERPROFILE", str(home)))
+    candidates = [
+        home / "Library" / "CloudStorage" / "Dropbox" / "OSRS Bank Share",
+        home / "Dropbox" / "OSRS Bank Share",
+        userprofile / "Dropbox" / "OSRS Bank Share",
+        userprofile / "OneDrive" / "OSRS Bank Share",
+    ]
+
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_dir():
+            return candidate
+    return None
+
+
+def _select_shared_folder_via_dialog() -> Path | None:
+    selected = QFileDialog.getExistingDirectory(
+        None,
+        "Select your shared OSRS Bank folder",
+        str(Path.home()),
+    )
+    if not selected:
+        return None
+    return Path(selected).expanduser()
+
+
+def _resolve_paths(args: argparse.Namespace) -> tuple[Path, str] | None:
+    if args.shared_folder:
+        shared_folder = Path(args.shared_folder).expanduser()
+        return shared_folder, args.output_name
+
+    config_path = _config_path()
+    config = _load_config(config_path)
+    if config:
+        configured_folder = config.get("shared_folder")
+        if isinstance(configured_folder, str) and configured_folder.strip():
+            configured_path = Path(configured_folder).expanduser()
+            if configured_path.exists() and configured_path.is_dir():
+                output_name = config.get("output_name")
+                if not isinstance(output_name, str) or not output_name.strip():
+                    output_name = DEFAULT_OUTPUT_NAME
+                return configured_path, output_name
+
+    detected = _auto_detect_shared_folder()
+    if detected is not None:
+        _save_config(config_path, detected, args.output_name)
+        return detected, args.output_name
+
+    selected_folder = _select_shared_folder_via_dialog()
+    if selected_folder is None:
+        QMessageBox.information(
+            None,
+            "Shared folder required",
+            "No shared folder was selected. The app will now exit.",
+        )
+        return None
+
+    _save_config(config_path, selected_folder, args.output_name)
+    return selected_folder, args.output_name
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -415,12 +516,18 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s - %(message)s",
     )
 
-    export_file = Path(args.shared_folder).expanduser() / args.output_name
     app = QApplication([])
+    resolved = _resolve_paths(args)
+    if resolved is None:
+        return 1
+
+    shared_folder, output_name = resolved
+    export_file = shared_folder / output_name
+
     win = BankViewerWindow(
         export_file=export_file,
-        shared_folder=Path(args.shared_folder).expanduser(),
-        output_name=args.output_name,
+        shared_folder=shared_folder,
+        output_name=output_name,
         debug=args.debug,
     )
     win.show()
