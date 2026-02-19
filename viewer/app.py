@@ -4,11 +4,14 @@ import argparse
 import json
 import logging
 from pathlib import Path
+import subprocess
+import sys
 from typing import Any
 
-from PySide6.QtCore import QFileSystemWatcher, QTimer
+from PySide6.QtCore import QFileSystemWatcher, QSettings, QTimer
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QHBoxLayout,
     QLabel,
@@ -28,10 +31,13 @@ LOGGER = logging.getLogger("viewer")
 
 
 class BankViewerWindow(QMainWindow):
-    def __init__(self, export_file: Path, debug: bool = False):
+    def __init__(self, export_file: Path, shared_folder: Path, output_name: str, debug: bool = False):
         super().__init__()
         self.export_file = export_file
+        self.shared_folder = shared_folder
+        self.output_name = output_name
         self.debug = debug
+        self.settings = QSettings("SharedBankGUI", "BankViewer")
 
         self.item_mapping: dict[int, str] = {}
         self._mapping_warning: str | None = None
@@ -52,6 +58,11 @@ class BankViewerWindow(QMainWindow):
         self.selection_label = QLabel("Save: -")
         self.selection_combo = QComboBox()
         self.selection_combo.currentIndexChanged.connect(self._on_selection_changed)
+
+        self.auto_export_checkbox = QCheckBox("Auto-export on launch")
+        auto_export_enabled = self.settings.value("auto_export_on_launch", True, type=bool)
+        self.auto_export_checkbox.setChecked(auto_export_enabled)
+        self.auto_export_checkbox.toggled.connect(self._on_toggle_auto_export)
 
         actions_row = QHBoxLayout()
         self.search_box = QLineEdit()
@@ -75,6 +86,7 @@ class BankViewerWindow(QMainWindow):
         layout.addWidget(self.mapping_banner)
         layout.addWidget(self.selection_label)
         layout.addWidget(self.selection_combo)
+        layout.addWidget(self.auto_export_checkbox)
         layout.addLayout(actions_row)
         layout.addWidget(self.summary_label)
         layout.addWidget(self.table)
@@ -92,7 +104,45 @@ class BankViewerWindow(QMainWindow):
         self.refresh_timer.setSingleShot(True)
         self.refresh_timer.timeout.connect(self.load_data)
 
+        if auto_export_enabled:
+            self._run_one_shot_export()
+
         self.load_data(initial=True)
+
+    def _on_toggle_auto_export(self, checked: bool) -> None:
+        self.settings.setValue("auto_export_on_launch", checked)
+
+    def _run_one_shot_export(self) -> None:
+        cmd = [
+            sys.executable,
+            "-m",
+            "exporter",
+            "--shared-folder",
+            str(self.shared_folder),
+            "--output-name",
+            self.output_name,
+            "--once",
+        ]
+        if self.debug:
+            cmd.append("--debug")
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as exc:
+            LOGGER.warning("Failed to run one-shot exporter: %s", exc)
+            return
+
+        if result.returncode != 0:
+            LOGGER.warning(
+                "One-shot exporter exited with code %s: %s",
+                result.returncode,
+                result.stderr.strip(),
+            )
 
     def _load_item_mapping(self, force_refresh: bool = False) -> None:
         try:
@@ -137,7 +187,7 @@ class BankViewerWindow(QMainWindow):
 
         if not self.export_file.exists():
             self.status_label.setText(
-                f"Export not found yet: {self.export_file}. Start exporter first."
+                f"Export not found yet: {self.export_file}."
             )
             self.summary_label.setText("Total items: 0")
             self.table.setRowCount(0)
@@ -335,7 +385,12 @@ def main(argv: list[str] | None = None) -> int:
 
     export_file = Path(args.shared_folder).expanduser() / args.output_name
     app = QApplication([])
-    win = BankViewerWindow(export_file=export_file, debug=args.debug)
+    win = BankViewerWindow(
+        export_file=export_file,
+        shared_folder=Path(args.shared_folder).expanduser(),
+        output_name=args.output_name,
+        debug=args.debug,
+    )
     win.show()
 
     if args.debug:
