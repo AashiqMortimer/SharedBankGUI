@@ -10,14 +10,19 @@ from PySide6.QtCore import QFileSystemWatcher, QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
+    QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
+    QPushButton,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
+
+from .item_mapping import ItemMappingUnavailableError, load_item_mapping
 
 LOGGER = logging.getLogger("viewer")
 
@@ -28,27 +33,49 @@ class BankViewerWindow(QMainWindow):
         self.export_file = export_file
         self.debug = debug
 
+        self.item_mapping: dict[int, str] = {}
+        self._mapping_warning: str | None = None
+        self._active_entries: list[dict[str, Any]] = []
+        self._load_item_mapping()
+
         self.setWindowTitle("RuneLite Bank Memory Viewer")
-        self.resize(700, 500)
+        self.resize(800, 560)
 
         central = QWidget(self)
         layout = QVBoxLayout(central)
 
         self.status_label = QLabel("Waiting for export data...")
+        self.mapping_banner = QLabel("")
+        self.mapping_banner.setStyleSheet("color: #c62828;")
+        self.mapping_banner.setVisible(False)
+
         self.selection_label = QLabel("Save: -")
         self.selection_combo = QComboBox()
         self.selection_combo.currentIndexChanged.connect(self._on_selection_changed)
+
+        actions_row = QHBoxLayout()
+        self.search_box = QLineEdit()
+        self.search_box.setPlaceholderText("Search by item name...")
+        self.search_box.textChanged.connect(self._apply_table_filter)
+
+        self.refresh_mapping_btn = QPushButton("Refresh item names")
+        self.refresh_mapping_btn.clicked.connect(self._on_refresh_item_names)
+        actions_row.addWidget(self.search_box)
+        actions_row.addWidget(self.refresh_mapping_btn)
+
         self.summary_label = QLabel("Total items: 0")
         self._current_options: list[dict[str, Any]] = []
         self._pending_payload: dict[str, Any] | None = None
 
-        self.table = QTableWidget(0, 2)
-        self.table.setHorizontalHeaderLabels(["itemId", "qty"])
+        self.table = QTableWidget(0, 3)
+        self.table.setHorizontalHeaderLabels(["Name", "itemId", "qty"])
         self.table.horizontalHeader().setStretchLastSection(True)
 
         layout.addWidget(self.status_label)
+        layout.addWidget(self.mapping_banner)
         layout.addWidget(self.selection_label)
         layout.addWidget(self.selection_combo)
+        layout.addLayout(actions_row)
         layout.addWidget(self.summary_label)
         layout.addWidget(self.table)
         self.setCentralWidget(central)
@@ -67,6 +94,31 @@ class BankViewerWindow(QMainWindow):
 
         self.load_data(initial=True)
 
+    def _load_item_mapping(self, force_refresh: bool = False) -> None:
+        try:
+            self.item_mapping = load_item_mapping(force_refresh=force_refresh)
+            self._mapping_warning = None
+        except ItemMappingUnavailableError:
+            self.item_mapping = {}
+            self._mapping_warning = (
+                "Unable to download item names and no cache was found. "
+                "Showing Unknown (id) labels."
+            )
+
+    def _on_refresh_item_names(self) -> None:
+        self._load_item_mapping(force_refresh=True)
+        self._update_mapping_banner()
+        if self._pending_payload is not None:
+            self._render_selected_save(self._get_selected_save(self._pending_payload))
+
+    def _update_mapping_banner(self) -> None:
+        if self._mapping_warning:
+            self.mapping_banner.setText(self._mapping_warning)
+            self.mapping_banner.setVisible(True)
+            return
+        self.mapping_banner.setText("")
+        self.mapping_banner.setVisible(False)
+
     def _on_file_changed(self, _path: str) -> None:
         self.refresh_timer.start(200)
 
@@ -81,6 +133,8 @@ class BankViewerWindow(QMainWindow):
 
     def load_data(self, initial: bool = False) -> None:
         self._ensure_watch_file()
+        self._update_mapping_banner()
+
         if not self.export_file.exists():
             self.status_label.setText(
                 f"Export not found yet: {self.export_file}. Start exporter first."
@@ -124,6 +178,37 @@ class BankViewerWindow(QMainWindow):
             return
         self._render_selected_save(self._get_selected_save(self._pending_payload))
 
+    def _apply_table_filter(self) -> None:
+        filter_text = self.search_box.text().strip().lower()
+        filtered_entries: list[dict[str, Any]] = []
+
+        if not filter_text:
+            filtered_entries = self._active_entries
+        else:
+            for entry in self._active_entries:
+                name = entry.get("name", "")
+                if isinstance(name, str) and filter_text in name.lower():
+                    filtered_entries.append(entry)
+
+        self.table.setRowCount(len(filtered_entries))
+        total_qty = 0
+
+        for row, entry in enumerate(filtered_entries):
+            item_id = entry.get("itemId", "?")
+            qty = entry.get("qty", 0)
+            name = entry.get("name", f"Unknown ({item_id})")
+
+            try:
+                total_qty += int(qty)
+            except (TypeError, ValueError):
+                pass
+
+            self.table.setItem(row, 0, QTableWidgetItem(str(name)))
+            self.table.setItem(row, 1, QTableWidgetItem(str(item_id)))
+            self.table.setItem(row, 2, QTableWidgetItem(str(qty)))
+
+        self.summary_label.setText(f"Total items: {total_qty}")
+
     def _refresh_selection_options(self, payload: dict[str, Any]) -> None:
         entries = payload.get("allCurrentParsed")
         if not isinstance(entries, list):
@@ -165,6 +250,7 @@ class BankViewerWindow(QMainWindow):
             self.selection_label.setText("Save: -")
             self.summary_label.setText("Total items: 0")
             self.table.setRowCount(0)
+            self._active_entries = []
             return
 
         account_name = selected.get("accountName", "unknown")
@@ -175,21 +261,25 @@ class BankViewerWindow(QMainWindow):
         )
 
         entries = self._normalize_current(selected.get("items"))
-        self.table.setRowCount(len(entries))
+        normalized_entries: list[dict[str, Any]] = []
 
-        total_qty = 0
-        for row, entry in enumerate(entries):
-            item_id = entry.get("itemId", entry.get("id", "?"))
-            qty = entry.get("qty", entry.get("quantity", 0))
+        for entry in entries:
+            raw_item_id = entry.get("itemId", entry.get("id", "?"))
+            item_id: int | str = raw_item_id
             try:
-                total_qty += int(qty)
+                item_id = int(raw_item_id)
             except (TypeError, ValueError):
                 pass
 
-            self.table.setItem(row, 0, QTableWidgetItem(str(item_id)))
-            self.table.setItem(row, 1, QTableWidgetItem(str(qty)))
+            qty = entry.get("qty", entry.get("quantity", 0))
+            name = self.item_mapping.get(item_id) if isinstance(item_id, int) else None
+            if not name:
+                name = f"Unknown ({item_id})"
 
-        self.summary_label.setText(f"Total items: {total_qty}")
+            normalized_entries.append({"name": name, "itemId": item_id, "qty": qty})
+
+        self._active_entries = normalized_entries
+        self._apply_table_filter()
 
     @staticmethod
     def _selection_label(entry: dict[str, Any]) -> str:
