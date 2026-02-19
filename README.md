@@ -1,4 +1,4 @@
-# RuneLite Bank Memory Export + Viewer (macOS-first)
+# RuneLite Bank Memory Export + Viewer
 
 This repo contains two Python 3.11+ tools:
 
@@ -31,7 +31,7 @@ Values are parsed as JSON and exported to:
 }
 ```
 
-## macOS setup
+## Development setup
 
 ### 1) Create and activate virtualenv
 
@@ -51,32 +51,76 @@ pip install -r requirements.txt
 
 The viewer can launch one-shot exports automatically on startup. You can still run the exporter manually for continuous sync.
 
-Use your iCloud shared path:
-
 ```bash
 python -m exporter \
-  --shared-folder "/Users/aashiqmortimer/Library/Mobile Documents/com~apple~CloudDocs/OSRS Bank Share" \
+  --shared-folder "/path/to/shared/folder" \
   --output-name "aashiq-bank.json" \
   --once
 ```
 
 Remove `--once` to keep the exporter running with file watching.
 
-Optional debug mode:
+## Run viewer GUI
 
 ```bash
-python -m exporter \
-  --shared-folder "/Users/aashiqmortimer/Library/Mobile Documents/com~apple~CloudDocs/OSRS Bank Share" \
-  --output-name "aashiq-bank.json" \
-  --debug
+python -m viewer \
+  --shared-folder "/path/to/shared/folder" \
+  --output-name "aashiq-bank.json"
 ```
 
-Debug mode prints:
+## Packaging with PyInstaller
 
-- which RuneLite config file was selected
-- which `bankMemory.*` keys are present
+The packaged viewer includes the exporter module and keeps **Auto-export on launch** working without a separate exporter binary.
 
-### Exporter behavior
+### macOS: build `.app`
+
+1. Create/activate a virtual environment and install runtime deps:
+
+   ```bash
+   python3.11 -m venv .venv
+   source .venv/bin/activate
+   pip install -r requirements.txt
+   ```
+
+2. Install PyInstaller:
+
+   ```bash
+   pip install pyinstaller
+   ```
+
+3. Run the macOS build script:
+
+   ```bash
+   ./scripts/build_macos.sh
+   ```
+
+4. Output artifact:
+
+   - `dist/BankViewer.app`
+
+### Windows: build `.exe`
+
+1. Open **Command Prompt** in repo root.
+2. Create/activate a virtual environment and install deps:
+
+   ```bat
+   py -3.11 -m venv .venv
+   .venv\Scripts\activate
+   pip install -r requirements.txt
+   pip install pyinstaller
+   ```
+
+3. Run the Windows build script:
+
+   ```bat
+   scripts\build_windows.bat
+   ```
+
+4. Output artifact:
+
+   - `dist\BankViewer\BankViewer.exe`
+
+## Exporter behavior
 
 - Scans `~/.runelite/profiles2/**/*.properties` for files containing `bankMemory.currentList`
 - If multiple matches exist, picks the **most recently modified** one
@@ -85,32 +129,14 @@ Debug mode prints:
 - Uses `watchdog` filesystem watch when available
 - Falls back to polling every 10 seconds if watchdog is unavailable
 
-## Run viewer GUI
+## Viewer behavior
 
-In another terminal (same venv):
-
-```bash
-python -m viewer \
-  --shared-folder "/Users/aashiqmortimer/Library/Mobile Documents/com~apple~CloudDocs/OSRS Bank Share" \
-  --output-name "aashiq-bank.json"
-```
-
-Optional debug mode:
-
-```bash
-python -m viewer \
-  --shared-folder "/Users/aashiqmortimer/Library/Mobile Documents/com~apple~CloudDocs/OSRS Bank Share" \
-  --output-name "aashiq-bank.json" \
-  --debug
-```
-
-### Viewer behavior
-
-- "Auto-export on launch" is enabled by default and runs `python -m exporter --once`
+- **Auto-export on launch** is enabled by default
+- In source runs: auto-export uses `python -m exporter --once`
+- In packaged runs: auto-export uses the embedded exporter module directly
 - Auto-refreshes when the export JSON file changes
-- Shows table rows for `itemId` + `qty` from `current`
+- Shows table rows for `itemId` + `qty` from the selected save
 - Shows total quantity sum
-- If `current` is `null`, displays: **"No bank data yet – open bank in-game"**
 
 ## Troubleshooting
 

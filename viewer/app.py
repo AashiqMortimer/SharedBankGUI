@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 import subprocess
 import sys
+import threading
 from typing import Any
 
 from PySide6.QtCore import QFileSystemWatcher, QSettings, QTimer
@@ -113,6 +114,10 @@ class BankViewerWindow(QMainWindow):
         self.settings.setValue("auto_export_on_launch", checked)
 
     def _run_one_shot_export(self) -> None:
+        if getattr(sys, "frozen", False):
+            self._run_embedded_exporter()
+            return
+
         cmd = [
             sys.executable,
             "-m",
@@ -143,6 +148,33 @@ class BankViewerWindow(QMainWindow):
                 result.returncode,
                 result.stderr.strip(),
             )
+
+    def _run_embedded_exporter(self) -> None:
+        def _run() -> None:
+            try:
+                from exporter.cli import main as exporter_main
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("Embedded exporter is unavailable: %s", exc)
+                return
+
+            args = [
+                "--shared-folder",
+                str(self.shared_folder),
+                "--output-name",
+                self.output_name,
+                "--once",
+            ]
+            if self.debug:
+                args.append("--debug")
+
+            try:
+                exit_code = exporter_main(args)
+                if exit_code != 0:
+                    LOGGER.warning("Embedded one-shot exporter exited with code %s", exit_code)
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("Embedded one-shot exporter failed: %s", exc)
+
+        threading.Thread(target=_run, name="embedded-exporter", daemon=True).start()
 
     def _load_item_mapping(self, force_refresh: bool = False) -> None:
         try:
