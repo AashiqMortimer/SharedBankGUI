@@ -52,6 +52,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Enable debug logging and print keys found in config file.",
     )
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Run a single export and exit.",
+    )
     return parser
 
 def unescape_java_properties_value(s: str) -> str:
@@ -368,6 +373,9 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     try:
+        if args.once:
+            loop.export_once()
+            return 0
         loop.run_watchdog()
     except ExporterError as exc:
         LOGGER.error("%s", exc)

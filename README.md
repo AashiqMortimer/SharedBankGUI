@@ -47,15 +47,20 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Run exporter
+## Run exporter (optional)
+
+The viewer can launch one-shot exports automatically on startup. You can still run the exporter manually for continuous sync.
 
 Use your iCloud shared path:
 
 ```bash
 python -m exporter \
   --shared-folder "/Users/aashiqmortimer/Library/Mobile Documents/com~apple~CloudDocs/OSRS Bank Share" \
-  --output-name "aashiq-bank.json"
+  --output-name "aashiq-bank.json" \
+  --once
 ```
+
+Remove `--once` to keep the exporter running with file watching.
 
 Optional debug mode:
 
@@ -75,8 +80,8 @@ Debug mode prints:
 
 - Scans `~/.runelite/profiles2/**/*.properties` for files containing `bankMemory.currentList`
 - If multiple matches exist, picks the **most recently modified** one
-- Exports once immediately
-- Keeps running and re-exports when the profile properties file changes
+- With `--once`, performs a single export and exits
+- Without `--once`, exports once immediately and keeps running
 - Uses `watchdog` filesystem watch when available
 - Falls back to polling every 10 seconds if watchdog is unavailable
 
@@ -101,6 +106,7 @@ python -m viewer \
 
 ### Viewer behavior
 
+- "Auto-export on launch" is enabled by default and runs `python -m exporter --once`
 - Auto-refreshes when the export JSON file changes
 - Shows table rows for `itemId` + `qty` from `current`
 - Shows total quantity sum
