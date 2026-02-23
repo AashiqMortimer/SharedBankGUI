@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Shared Bank Viewer</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 1rem auto; max-width: 1100px; }
+      .controls { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem; }
+      table { border-collapse: collapse; width: 100%; margin-bottom: 1rem; }
+      th, td { border: 1px solid #ddd; padding: 0.5rem; }
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+      .muted { color: #666; font-size: 0.9rem; }
+    </style>
+  </head>
+  <body>
+    <h1>Shared Bank Viewer</h1>
+
+    <div class="controls">
+      <label>API URL <input id="apiUrl" size="60" /></label>
+      <label>Write Secret <input id="writeSecret" type="password" /></label>
+      <button id="testConnectionBtn">Test connection</button>
+      <label><input id="showHiddenToggle" type="checkbox" /> Show hidden items</label>
+      <label><input id="includeHiddenCompareToggle" type="checkbox" /> Include hidden in compare</label>
+    </div>
+
+    <div id="status" class="muted"></div>
+    <div class="grid" id="players"></div>
+
+    <h2>Compare</h2>
+    <table>
+      <thead><tr><th>Item ID</th><th>Ad The Saint Qty</th><th>Sic Saint Qty</th><th>Difference</th></tr></thead>
+      <tbody id="compareBody"></tbody>
+    </table>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
