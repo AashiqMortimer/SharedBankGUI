@@ -1,149 +1,53 @@
-# RuneLite Bank Memory Export + Viewer
+# Shared Bank GUI (GitHub Pages + Google Apps Script)
 
-This repo contains two Python 3.11+ tools:
+This repository contains a static frontend (`web/`) and a Google Apps Script backend (`apps_script/Code.gs`) for syncing and viewing RuneLite Bank Memory TSV snapshots for:
 
-1. **Exporter** (`python -m exporter`)  
-   Reads RuneLite `bankMemory` plugin config from `~/.runelite/profiles2/**/*.properties` and writes a normalized JSON export.
-2. **Viewer** (`python -m viewer`)  
-   Simple GUI (PySide6) to display current bank item IDs and quantities from the export file.
+- `Ad The Saint`
+- `Sic Saint`
 
-## What gets exported
+## Backend sheet setup
 
-The exporter reads these ConfigManager keys under group `bankMemory`:
+Create a Google Sheet with **two tabs**:
 
-- `bankMemory.currentList`
-- `bankMemory.snapshotList`
-- `bankMemory.nameMap`
+### `Snapshots`
+- Column A: `player`
+- Column B: `snapshotJson`
+- Column C: `lastUpdatedUtc`
 
-Values are parsed as JSON and exported to:
+### `HiddenItems`
+- Column A: `player`
+- Column B: `hiddenJson`
+- Column C: `lastUpdatedUtc`
 
-```json
-{
-  "exportedAt": "<ISO8601>",
-  "source": {
-    "os": "macOS",
-    "profile": "<profile name or file>",
-    "configFile": "<path>"
-  },
-  "current": null,
-  "snapshots": [],
-  "nameMap": {}
-}
-```
+`hiddenJson` stores a JSON array of hidden item IDs (example: `[563,554,28924]`).
 
-## Development setup
+## Apps Script behavior
 
-### 1) Create and activate virtualenv
+`apps_script/Code.gs` supports:
 
-```bash
-cd /workspace/SharedBankGUI
-python3.11 -m venv .venv
-source .venv/bin/activate
-```
+- `GET`: returns both snapshot data and hidden items for each player.
+- `POST` with `action: "setSnapshot"`: upserts snapshot data into `Snapshots`.
+- `POST` with `action: "setHidden"`: upserts hidden item IDs into `HiddenItems`.
 
-### 2) Install dependencies
+Authentication uses script property `WRITE_SECRET`.
 
-```bash
-pip install -r requirements.txt
-```
+Safe JSON parsing is used while reading rows: malformed JSON falls back to defaults (`{items:[]}` or `[]`) instead of throwing.
 
-## Run exporter (optional)
+## Frontend behavior (`web/`)
 
-The viewer can launch one-shot exports automatically on startup. You can still run the exporter manually for continuous sync.
+- Maintains per-player model:
+  - `snapshot.items`
+  - `hiddenIds` (Set)
+  - timestamps (`lastUpdatedUtc`, `hiddenLastUpdatedUtc`, `localImportedAt`, `lastRefresh`)
+- Adds a **Hidden** action column:
+  - `Hide` for visible item
+  - `Unhide` for hidden item
+- Adds toggle: **Show hidden items** (default off)
+- Adds toggle in compare: **Include hidden in compare** (default off)
+- On initial load (when API URL is set) and on **Test connection**, pulls remote state and renders tables.
+- Hide/unhide updates UI instantly and then persists remotely with `setHidden`.
+- Snapshot sync (`setSnapshot`) does not modify hidden state.
 
-```bash
-python -m exporter \
-  --shared-folder "/path/to/shared/folder" \
-  --output-name "aashiq-bank.json" \
-  --once
-```
+## Deploy / run
 
-Remove `--once` to keep the exporter running with file watching.
-
-## Run viewer GUI
-
-```bash
-python -m viewer \
-  --shared-folder "/path/to/shared/folder" \
-  --output-name "aashiq-bank.json"
-```
-
-You can also launch the viewer without CLI args. On first run it will ask you to choose your shared folder, and after that it remembers your selection.
-
-## Packaging with PyInstaller
-
-The packaged viewer includes the exporter module and keeps **Auto-export on launch** working without a separate exporter binary.
-
-### macOS: build `.app`
-
-1. Create/activate a virtual environment and install runtime deps:
-
-   ```bash
-   python3.11 -m venv .venv
-   source .venv/bin/activate
-   pip install -r requirements.txt
-   ```
-
-2. Install PyInstaller:
-
-   ```bash
-   pip install pyinstaller
-   ```
-
-3. Run the macOS build script:
-
-   ```bash
-   ./scripts/build_macos.sh
-   ```
-
-   The build uses a top-level `viewer_app.py` entrypoint so PyInstaller starts the viewer with absolute imports (avoids macOS app launch failures from package-relative entrypoints).
-
-4. Output artifact:
-
-   - `dist/BankViewer.app`
-
-### Windows: build `.exe`
-
-1. Open **Command Prompt** in repo root.
-2. Create/activate a virtual environment and install deps:
-
-   ```bat
-   py -3.11 -m venv .venv
-   .venv\Scripts\activate
-   pip install -r requirements.txt
-   pip install pyinstaller
-   ```
-
-3. Run the Windows build script:
-
-   ```bat
-   scripts\build_windows.bat
-   ```
-
-4. Output artifact:
-
-   - `dist\BankViewer\BankViewer.exe`
-
-## Exporter behavior
-
-- Scans `~/.runelite/profiles2/**/*.properties` for files containing `bankMemory.currentList`
-- If multiple matches exist, picks the **most recently modified** one
-- With `--once`, performs a single export and exits
-- Without `--once`, exports once immediately and keeps running
-- Uses `watchdog` filesystem watch when available
-- Falls back to polling every 10 seconds if watchdog is unavailable
-
-## Viewer behavior
-
-- **Auto-export on launch** is enabled by default
-- In source runs: auto-export uses `python -m exporter --once`
-- In packaged runs: auto-export uses the embedded exporter module directly
-- Auto-refreshes when the export JSON file changes
-- Shows table rows for `itemId` + `qty` from the selected save
-- Shows total quantity sum
-
-## Troubleshooting
-
-- If exporter says no bankMemory keys were found, open your OSRS bank once in RuneLite with Bank Memory plugin enabled.
-- If multiple RuneLite profiles exist, exporter chooses the newest matching profile file automatically.
-- If GUI doesn’t update instantly, it should still refresh on file change events; restart viewer if needed.
+You can host `web/` on GitHub Pages. Set your Apps Script Web App URL and write secret in the UI fields, then use **Test connection** to pull the latest server state.
