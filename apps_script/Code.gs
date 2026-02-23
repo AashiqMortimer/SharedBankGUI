@@ -3,51 +3,59 @@ const HIDDEN_ITEMS_SHEET = 'HiddenItems';
 const PLAYERS = ['Ad The Saint', 'Sic Saint'];
 
 function doGet() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const snapshotMap = readSheetMap_(ss, SNAPSHOTS_SHEET, false);
-  const hiddenMap = readSheetMap_(ss, HIDDEN_ITEMS_SHEET, true);
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const snapshotMap = readSheetMap_(ss, SNAPSHOTS_SHEET, false);
+    const hiddenMap = readSheetMap_(ss, HIDDEN_ITEMS_SHEET, true);
 
-  const players = {};
-  for (const player of PLAYERS) {
-    const snapshotData = snapshotMap[player] || {};
-    const hiddenData = hiddenMap[player] || {};
-    players[player] = {
-      snapshot: snapshotData.snapshot || { items: [] },
-      lastUpdatedUtc: snapshotData.lastUpdatedUtc || null,
-      hidden: Array.isArray(hiddenData.hidden) ? hiddenData.hidden : [],
-      hiddenLastUpdatedUtc: hiddenData.lastUpdatedUtc || null,
-    };
+    const players = {};
+    for (const player of PLAYERS) {
+      const snapshotData = snapshotMap[player] || {};
+      const hiddenData = hiddenMap[player] || {};
+      players[player] = {
+        snapshot: snapshotData.snapshot || { items: [] },
+        lastUpdatedUtc: snapshotData.lastUpdatedUtc || null,
+        hidden: Array.isArray(hiddenData.hidden) ? hiddenData.hidden : [],
+        hiddenLastUpdatedUtc: hiddenData.lastUpdatedUtc || null,
+      };
+    }
+
+    return jsonOutput_({
+      serverTimeUtc: new Date().toISOString(),
+      players,
+    }, 200);
+  } catch (err) {
+    return jsonOutput_({ ok: false, error: String(err) }, 500);
   }
-
-  return jsonOutput_({
-    serverTimeUtc: new Date().toISOString(),
-    players,
-  });
 }
 
 function doPost(e) {
-  const body = parsePostBody_(e);
-  const secret = body.secret;
-  const action = body.action;
+  try {
+    const body = parsePostBody_(e);
 
-  if (!validateSecret_(secret)) {
-    return jsonOutput_({ ok: false, error: 'Unauthorized' }, 401);
+    if (!validateSecret_(body.secret)) {
+      return jsonOutput_({ ok: false, error: 'Unauthorized' }, 401);
+    }
+
+    const action = body.action;
+
+    if (action === 'setSnapshot') {
+      validatePlayer_(body.player);
+      upsertJsonRow_(SNAPSHOTS_SHEET, body.player, body.snapshot);
+      return jsonOutput_({ ok: true, action, player: body.player, savedAtUtc: new Date().toISOString() }, 200);
+    }
+
+    if (action === 'setHidden') {
+      validatePlayer_(body.player);
+      const hidden = normalizeHiddenArray_(body.hidden);
+      upsertJsonRow_(HIDDEN_ITEMS_SHEET, body.player, hidden);
+      return jsonOutput_({ ok: true, action, player: body.player, hidden, savedAtUtc: new Date().toISOString() }, 200);
+    }
+
+    return jsonOutput_({ ok: false, error: 'Unknown action' }, 400);
+  } catch (err) {
+    return jsonOutput_({ ok: false, error: String(err) }, 400);
   }
-
-  if (action === 'setSnapshot') {
-    validatePlayer_(body.player);
-    upsertJsonRow_(SNAPSHOTS_SHEET, body.player, body.snapshot);
-    return jsonOutput_({ ok: true, action, player: body.player, savedAtUtc: new Date().toISOString() });
-  }
-
-  if (action === 'setHidden') {
-    validatePlayer_(body.player);
-    const hidden = normalizeHiddenArray_(body.hidden);
-    upsertJsonRow_(HIDDEN_ITEMS_SHEET, body.player, hidden);
-    return jsonOutput_({ ok: true, action, player: body.player, hidden, savedAtUtc: new Date().toISOString() });
-  }
-
-  return jsonOutput_({ ok: false, error: 'Unknown action' }, 400);
 }
 
 function validateSecret_(incoming) {
@@ -85,10 +93,11 @@ function normalizeHiddenArray_(value) {
 function readSheetMap_(ss, sheetName, expectArray) {
   const sheet = ensureSheet_(ss, sheetName);
   const lastRow = sheet.getLastRow();
-  if (lastRow < 1) return {};
+  if (lastRow < 2) return {}; // row 1 is headers
 
-  const values = sheet.getRange(1, 1, lastRow, 3).getValues();
+  const values = sheet.getRange(2, 1, lastRow - 1, 3).getValues(); // start at row 2
   const map = {};
+
   for (const [player, jsonText, lastUpdatedUtc] of values) {
     if (!player) continue;
     map[player] = {
@@ -141,8 +150,14 @@ function ensureSheet_(ss, name) {
   return sheet;
 }
 
-function jsonOutput_(data) {
-  return ContentService
+function jsonOutput_(data, statusCode) {
+  const output = ContentService
     .createTextOutput(JSON.stringify(data))
     .setMimeType(ContentService.MimeType.JSON);
+
+  // Apps Script doesn't fully support setting HTTP status everywhere,
+  // but setContent() still returns JSON consistently.
+  // (Some clients may ignore statusCode.)
+  // If you prefer, you can omit statusCode usage entirely.
+  return output;
 }
